@@ -1,9 +1,18 @@
 // Loads cubiomes.wasm and exposes a clean JS API.
-// The actual WASM is compiled by you — see README for instructions.
-// Until you have the real WASM, a stub fallback is used so the UI still works.
+// Uses the actual cubiomes C API as of 2025:
+//   setupGenerator, applySeed, getBiomeAt, getStructureConfig, getStructurePos
 
 let _module = null
 let _stub = false
+
+// Called by worker.js after loading WASM via importScripts
+export function setModule(mod) {
+  _module = mod
+  _stub = false
+}
+
+// Generator struct size — large enough for any version
+const GEN_SIZE = 8192
 
 // Version string → cubiomes MC_VERSION int
 const VERSION_MAP = {
@@ -16,85 +25,133 @@ const VERSION_MAP = {
   }
 }
 
+// cubiomes structure type enum values (from finders.h)
+const STRUCT_IDS = {
+  desert_temple:   0,  // Desert_Pyramid
+  jungle_temple:   1,  // Jungle_Temple
+  witch_hut:       2,  // Swamp_Hut
+  igloo:           3,
+  village:         4,
+  shipwreck:       5,
+  monument:        6,
+  mansion:         7,
+  outpost:         8,
+  ruined_portal:   9,
+  ancient_city:    10,
+  mineshaft:       11,
+  nether_fortress: 13, // Fortress
+  bastion:         14,
+  trial_chamber:   15, // Trial_Chambers
+  end_city:        16,
+}
+
 export async function loadCubiomes() {
   try {
-    // Try loading real WASM
-    const CubiomesModule = (await import('/wasm/cubiomes.js')).default
-    _module = await CubiomesModule()
-    console.log('[cubiomes] WASM loaded successfully')
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script')
+      s.src = '/wasm/cubiomes.js'
+      s.onload = resolve
+      s.onerror = reject
+      document.head.appendChild(s)
+    })
+    _module = await window.CubiomesModule()
+    console.log('[cubiomes] WASM loaded OK')
   } catch (e) {
-    console.warn('[cubiomes] WASM not found, using stub biome data:', e.message)
+    console.warn('[cubiomes] WASM not found, using stub:', e.message)
     _stub = true
   }
 }
 
-// Seed string → int64-safe number (Java edition hashes strings)
-export function parseSeed(seedStr, edition) {
-  const n = Number(seedStr)
-  if (!isNaN(n) && String(n) === seedStr.trim()) return n
-  // String seed: simple hash (matches Java's String.hashCode)
+// Seed string → number (Java string hash if not a plain number)
+export function parseSeed(seedStr) {
+  const trimmed = String(seedStr).trim()
+  const n = Number(trimmed)
+  if (!isNaN(n) && String(n) === trimmed) return n
   let hash = 0
-  for (let i = 0; i < seedStr.length; i++) {
-    hash = Math.imul(31, hash) + seedStr.charCodeAt(i) | 0
+  for (let i = 0; i < trimmed.length; i++) {
+    hash = Math.imul(31, hash) + trimmed.charCodeAt(i) | 0
   }
-  return hash
+  return hash >>> 0
 }
 
-// Get biome at a block position.
-// Returns a biome ID integer.
+// Get biome ID at a block position
 export function getBiomeAt(seed, edition, version, dimension, blockX, blockZ) {
   if (_stub || !_module) return stubBiome(blockX, blockZ)
 
   const mcVer = VERSION_MAP[edition]?.[version] ?? 21
   const dimId = { overworld: 0, nether: -1, end: 1 }[dimension] ?? 0
-  const numSeed = parseSeed(String(seed), edition)
+  const numSeed = parseSeed(seed)
 
-  // cubiomes C API: setupGenerator, applySeed, getBiomeAt
   try {
-    const g = _module._malloc(4096) // generator struct
+    const g = _module._malloc(GEN_SIZE)
     _module._setupGenerator(g, mcVer, 0)
     _module._applySeed(g, dimId, numSeed)
-    const biome = _module._getBiomeAt(g, 1, blockX, 64, blockZ)
+    // getBiomeAt(g, scale, x, y, z) — scale 1 = block, 4 = quarter
+    const biome = _module._getBiomeAt(g, 4, blockX >> 2, 64, blockZ >> 2)
     _module._free(g)
     return biome
-  } catch {
+  } catch (e) {
+    console.warn('[cubiomes] getBiomeAt error:', e)
     return stubBiome(blockX, blockZ)
   }
 }
 
-// Get structure positions in a region.
-// Returns array of {x, z, type}
+// Get structure positions in a world region
+// Returns array of { x, z, type }
 export function getStructuresInRegion(seed, edition, version, dimension, x0, z0, x1, z1) {
   if (_stub || !_module) return stubStructures(seed, dimension, x0, z0, x1, z1)
 
-  const mcVer = VERSION_MAP[edition]?.[version] ?? 21
-  const dimId = { overworld: 0, nether: -1, end: 1 }[dimension] ?? 0
-  const numSeed = parseSeed(String(seed), edition)
+  const mcVer  = VERSION_MAP[edition]?.[version] ?? 21
+  const dimId  = { overworld: 0, nether: -1, end: 1 }[dimension] ?? 0
+  const numSeed = parseSeed(seed)
   const results = []
 
-  // Structure type IDs in cubiomes
-  const structureTypes = getStructureTypesForDimension(dimension)
+  const types  = getStructureTypesForDimension(dimension)
 
   try {
-    const g = _module._malloc(4096)
+    const g      = _module._malloc(GEN_SIZE)
+    const sconf  = _module._malloc(64)   // StructureConfig is small
+    const posPtr = _module._malloc(8)    // Pos = two ints
+
     _module._setupGenerator(g, mcVer, 0)
     _module._applySeed(g, dimId, numSeed)
 
-    const outBuf = _module._malloc(4 * 2 * 512) // up to 512 results
+    const regionSize = 512  // blocks — scan in 512-block region chunks
+    const rx0 = Math.floor(x0 / regionSize)
+    const rz0 = Math.floor(z0 / regionSize)
+    const rx1 = Math.ceil(x1  / regionSize)
+    const rz1 = Math.ceil(z1  / regionSize)
 
-    for (const { type, id } of structureTypes) {
-      const count = _module._findStructures(g, id, x0 >> 4, z0 >> 4, x1 >> 4, z1 >> 4, outBuf, 512)
-      for (let i = 0; i < count; i++) {
-        const ox = _module.HEAP32[(outBuf >> 2) + i * 2]
-        const oz = _module.HEAP32[(outBuf >> 2) + i * 2 + 1]
-        results.push({ x: ox * 16, z: oz * 16, type })
+    for (const { type } of types) {
+      const structId = STRUCT_IDS[type]
+      if (structId === undefined) continue
+
+      // getStructureConfig(structureType, mc, *sconf) → 1 on success
+      const ok = _module._getStructureConfig(structId, mcVer, sconf)
+      if (!ok) continue
+
+      for (let rx = rx0; rx <= rx1; rx++) {
+        for (let rz = rz0; rz <= rz1; rz++) {
+          // getStructurePos(structureType, mc, seed, regX, regZ, *pos) → 1 on success
+          const found = _module._getStructurePos(structId, mcVer, numSeed, rx, rz, posPtr)
+          if (!found) continue
+
+          const px = _module.HEAP32[(posPtr >> 2)]
+          const pz = _module.HEAP32[(posPtr >> 2) + 1]
+
+          // Filter to requested region
+          if (px >= x0 && px <= x1 && pz >= z0 && pz <= z1) {
+            results.push({ x: px, z: pz, type })
+          }
+        }
       }
     }
 
-    _module._free(outBuf)
+    _module._free(posPtr)
+    _module._free(sconf)
     _module._free(g)
   } catch (e) {
-    console.warn('[cubiomes] structure error:', e)
+    console.warn('[cubiomes] getStructuresInRegion error:', e)
   }
 
   return results
@@ -104,54 +161,82 @@ export function getStructuresInRegion(seed, edition, version, dimension, x0, z0,
 export function getStructureTypesForDimension(dimension) {
   const map = {
     overworld: [
-      { type: 'village',        id: 1,  label: 'Village',          icon: '🏘' },
-      { type: 'stronghold',     id: 2,  label: 'Stronghold',        icon: '🔮' },
-      { type: 'desert_temple',  id: 3,  label: 'Desert Temple',     icon: '🏛' },
-      { type: 'jungle_temple',  id: 4,  label: 'Jungle Temple',     icon: '🌿' },
-      { type: 'witch_hut',      id: 5,  label: 'Witch Hut',         icon: '🧙' },
-      { type: 'monument',       id: 6,  label: 'Ocean Monument',    icon: '🏯' },
-      { type: 'mansion',        id: 7,  label: 'Woodland Mansion',  icon: '🏚' },
-      { type: 'outpost',        id: 8,  label: 'Pillager Outpost',  icon: '🗼' },
-      { type: 'shipwreck',      id: 9,  label: 'Shipwreck',         icon: '⚓' },
-      { type: 'ruined_portal',  id: 10, label: 'Ruined Portal',     icon: '🌀' },
-      { type: 'mineshaft',      id: 11, label: 'Mineshaft',         icon: '⛏' },
-      { type: 'buried_treasure',id: 12, label: 'Buried Treasure',   icon: '💎' },
-      { type: 'trial_chamber',  id: 13, label: 'Trial Chamber',     icon: '⚔' },
-      { type: 'ancient_city',   id: 14, label: 'Ancient City',      icon: '🏙' },
+      { type: 'village',         label: 'Village',          icon: '🏘' },
+      { type: 'desert_temple',   label: 'Desert Temple',    icon: '🏛' },
+      { type: 'jungle_temple',   label: 'Jungle Temple',    icon: '🌿' },
+      { type: 'witch_hut',       label: 'Witch Hut',        icon: '🧙' },
+      { type: 'igloo',           label: 'Igloo',            icon: '🧊' },
+      { type: 'monument',        label: 'Ocean Monument',   icon: '🏯' },
+      { type: 'mansion',         label: 'Woodland Mansion', icon: '🏚' },
+      { type: 'outpost',         label: 'Pillager Outpost', icon: '🗼' },
+      { type: 'shipwreck',       label: 'Shipwreck',        icon: '⚓' },
+      { type: 'ruined_portal',   label: 'Ruined Portal',    icon: '🌀' },
+      { type: 'mineshaft',       label: 'Mineshaft',        icon: '⛏' },
+      { type: 'ancient_city',    label: 'Ancient City',     icon: '🏙' },
+      { type: 'trial_chamber',   label: 'Trial Chamber',    icon: '⚔' },
     ],
     nether: [
-      { type: 'nether_fortress',id: 15, label: 'Nether Fortress',   icon: '🔥' },
-      { type: 'bastion',        id: 16, label: 'Bastion Remnant',   icon: '👹' },
-      { type: 'ruined_portal',  id: 10, label: 'Ruined Portal',     icon: '🌀' },
+      { type: 'nether_fortress', label: 'Nether Fortress',  icon: '🔥' },
+      { type: 'bastion',         label: 'Bastion Remnant',  icon: '👹' },
+      { type: 'ruined_portal',   label: 'Ruined Portal',    icon: '🌀' },
     ],
     end: [
-      { type: 'end_city',       id: 17, label: 'End City',          icon: '🏰' },
-      { type: 'end_gateway',    id: 18, label: 'End Gateway',       icon: '🌌' },
+      { type: 'end_city',        label: 'End City',         icon: '🏰' },
     ],
   }
   return map[dimension] ?? []
 }
 
-// ── Biome color lookup ──────────────────────────────────────────────────────
+// ── Biome colors ─────────────────────────────────────────────────────────────
 
 export const BIOME_COLORS = {
   0:  [141,179, 96],  // plains
   1:  [250,148, 24],  // desert
-  2:  [ 96,160, 82],  // forest
+  2:  [ 96,160, 82],  // forest (wooded hills)
   3:  [  5,102, 33],  // taiga
   4:  [ 37,123, 70],  // swamp
-  5:  [ 11,102,89],   // river
+  5:  [ 11,102, 89],  // river
   6:  [178,173,132],  // nether wastes
   7:  [100,100,100],  // the end
   8:  [ 64, 64,144],  // frozen ocean
   9:  [ 96,160,170],  // frozen river
   10: [255,255,255],  // snowy plains
-  11: [160,160,255],  // snowy tundra
+  11: [160,160,255],  // snowy mountains
   12: [ 49, 85, 74],  // mushroom fields
   13: [ 96, 96, 96],  // beach
-  14: [136,179, 96],  // jungle
-  15: [255,128, 64],  // badlands
-  // extend as needed
+  14: [  0,168,  0],  // jungle (dark green)
+  15: [  0,  0,255],  // deep ocean
+  16: [247,233,163],  // badlands plateau
+  17: [178,173,132],  // eroded badlands
+  18: [100,100,100],  // stone shore
+  21: [ 83,123, 9],   // jungle hills
+  23: [100,100,255],  // deep ocean (dark)
+  24: [ 96,160,170],  // cold ocean
+  25: [100,100,255],  // deep cold ocean
+  26: [ 96,160,170],  // lukewarm ocean
+  27: [100,100,255],  // deep lukewarm ocean
+  28: [100,100,255],  // warm ocean
+  29: [100,100,255],  // deep warm ocean
+  30: [  5,102, 33],  // snowy taiga
+  32: [  5,102, 33],  // giant tree taiga
+  35: [141,179, 96],  // savanna
+  36: [141,179, 96],  // savanna plateau
+  37: [178,173,132],  // badlands
+  38: [178,173,132],  // wooded badlands
+  39: [178,173,132],  // eroded badlands
+  40: [141,179, 96],  // windswept hills
+  41: [ 96,160, 82],  // flower forest
+  44: [ 64,164,164],  // mangrove swamp
+  45: [ 25,180, 80],  // cherry grove
+  46: [ 96,160, 82],  // old growth forest
+  47: [  5,102, 33],  // old growth taiga
+  48: [  5,102, 33],  // old growth pine taiga
+  49: [141,179, 96],  // meadow
+  50: [255,255,255],  // frozen peaks
+  51: [178,178,178],  // jagged peaks
+  52: [200,200,200],  // stony peaks
+  53: [178,178,178],  // grove
+  54: [255,255,255],  // snowy slopes
 }
 
 export function biomeColor(id) {
@@ -161,14 +246,16 @@ export function biomeColor(id) {
 export const BIOME_NAMES = {
   0: 'Plains', 1: 'Desert', 2: 'Forest', 3: 'Taiga', 4: 'Swamp',
   5: 'River', 6: 'Nether Wastes', 7: 'The End', 8: 'Frozen Ocean',
-  9: 'Frozen River', 10: 'Snowy Plains', 11: 'Snowy Tundra',
-  12: 'Mushroom Fields', 13: 'Beach', 14: 'Jungle', 15: 'Badlands',
+  9: 'Frozen River', 10: 'Snowy Plains', 12: 'Mushroom Fields',
+  13: 'Beach', 14: 'Jungle', 21: 'Jungle Hills', 30: 'Snowy Taiga',
+  35: 'Savanna', 37: 'Badlands', 40: 'Windswept Hills',
+  41: 'Flower Forest', 44: 'Mangrove Swamp', 45: 'Cherry Grove',
+  49: 'Meadow', 50: 'Frozen Peaks', 54: 'Snowy Slopes',
 }
 
-// ── Stubs (used when WASM not yet compiled) ─────────────────────────────────
+// ── Stubs ─────────────────────────────────────────────────────────────────────
 
 function stubBiome(x, z) {
-  // Simple deterministic noise for demo purposes
   const v = Math.abs(Math.sin(x * 0.01) * Math.cos(z * 0.01) * 100) | 0
   return v % 16
 }
@@ -176,22 +263,20 @@ function stubBiome(x, z) {
 function stubStructures(seed, dimension, x0, z0, x1, z1) {
   const types = getStructureTypesForDimension(dimension)
   const results = []
-  const numSeed = typeof seed === 'string' ? parseInt(seed) || 12345 : seed
+  const numSeed = parseSeed(seed)
   const spacing = 512
   const cx0 = Math.floor(x0 / spacing)
   const cz0 = Math.floor(z0 / spacing)
-  const cx1 = Math.ceil(x1 / spacing)
-  const cz1 = Math.ceil(z1 / spacing)
-
+  const cx1 = Math.ceil(x1  / spacing)
+  const cz1 = Math.ceil(z1  / spacing)
   for (let cx = cx0; cx <= cx1; cx++) {
     for (let cz = cz0; cz <= cz1; cz++) {
       const rng = Math.abs(Math.sin(cx * 7 + cz * 13 + numSeed) * 1e6) | 0
       if (rng % 4 === 0 && types.length > 0) {
-        const type = types[rng % types.length].type
         results.push({
           x: cx * spacing + (rng % 200) - 100,
           z: cz * spacing + ((rng >> 4) % 200) - 100,
-          type,
+          type: types[rng % types.length].type,
         })
       }
     }
