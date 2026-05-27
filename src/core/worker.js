@@ -1,4 +1,4 @@
-import { getBiomeAt, getStructuresInRegion, biomeColor, setModule } from './cubiomes.js'
+import { getBiomeAt, getStructuresInRegion, biomeColor, setModule } from './cubiomes-core.js'
 
 let ready = false
 
@@ -6,30 +6,26 @@ async function init() {
   try {
     console.log('[worker] fetching /wasm/cubiomes.js...')
     const res = await fetch('/wasm/cubiomes.js')
-    console.log('[worker] fetch status:', res.status, res.headers.get('content-type'))
+    console.log('[worker] fetch status:', res.status)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const text = await res.text()
-    console.log('[worker] script length:', text.length, 'first 80 chars:', text.slice(0, 80))
+    console.log('[worker] script length:', text.length)
 
-    // Wrap in an IIFE that returns the function, works regardless of eval scope
     const factory = new Function(text + '\nreturn CubiomesModule;')
     const CubiomesModuleFn = factory()
-    console.log('[worker] factory done, CubiomesModuleFn type:', typeof CubiomesModuleFn)
+    console.log('[worker] factory done, type:', typeof CubiomesModuleFn)
 
     const mod = await CubiomesModuleFn({
       locateFile(path) {
-        console.log('[worker] locateFile called for:', path)
+        console.log('[worker] locateFile:', path)
         return '/wasm/' + path
       },
-      onAbort(reason) {
-        console.error('[worker] WASM aborted:', reason)
-      }
     })
     console.log('[worker] module instantiated, _getBiomeAt:', typeof mod._getBiomeAt)
     setModule(mod)
     console.log('[worker] WASM fully ready')
   } catch (e) {
-    console.warn('[worker] WASM failed:', e.message, e.stack)
+    console.warn('[worker] WASM failed:', e.message)
   }
   ready = true
   self.postMessage({ type: 'ready' })
@@ -47,10 +43,9 @@ self.onmessage = function({ data }) {
     const blockPerPx = 256 / size
     const buf = new Uint8ClampedArray(size * size * 4)
 
-    // Debug first tile only
     if (tileX === 0 && tileZ === 0) {
-      const testBiome = getBiomeAt(seed, edition, version, dimension, 0, 0)
-      console.log('[worker] test getBiomeAt(0,0):', testBiome, 'stub?', !self._cubiomesModule)
+      const test = getBiomeAt(seed, edition, version, dimension, 0, 0)
+      console.log('[worker] first tile biome at 0,0:', test)
     }
 
     for (let py = 0; py < size; py++) {
@@ -65,24 +60,24 @@ self.onmessage = function({ data }) {
           b = Math.round(b * 0.25)
         }
         const i = (py * size + px) * 4
-        buf[i] = r; buf[i+1] = g; buf[i+2] = b; buf[i+3] = 255
+        buf[i]=r; buf[i+1]=g; buf[i+2]=b; buf[i+3]=255
       }
     }
-    self.postMessage({ type: 'tileReady', id, result: { tileX, tileZ, buf } }, [buf.buffer])
+    self.postMessage({ type:'tileReady', id, result:{ tileX, tileZ, buf } }, [buf.buffer])
     return
   }
 
   if (type === 'getStructures') {
     const { seed, edition, version, dimension, x0, z0, x1, z1 } = payload
     const result = getStructuresInRegion(seed, edition, version, dimension, x0, z0, x1, z1)
-    self.postMessage({ type: 'structuresReady', id, result })
+    self.postMessage({ type:'structuresReady', id, result })
     return
   }
 
   if (type === 'getBiomeName') {
     const { seed, edition, version, dimension, blockX, blockZ } = payload
     const biomeId = getBiomeAt(seed, edition, version, dimension, blockX, blockZ)
-    self.postMessage({ type: 'biomeNameReady', id, result: biomeId })
+    self.postMessage({ type:'biomeNameReady', id, result: biomeId })
     return
   }
 }
