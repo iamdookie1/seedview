@@ -4,24 +4,31 @@ let ready = false
 
 async function init() {
   try {
+    console.log('[worker] fetching /wasm/cubiomes.js...')
     const res = await fetch('/wasm/cubiomes.js')
+    console.log('[worker] fetch status:', res.status, res.headers.get('content-type'))
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const text = await res.text()
+    console.log('[worker] script length:', text.length, 'first 80 chars:', text.slice(0, 80))
 
     const indirectEval = eval
     indirectEval(text)
+    console.log('[worker] eval done, CubiomesModule type:', typeof self.CubiomesModule)
 
-    // Override locateFile so Emscripten finds the .wasm at the correct absolute URL
     const mod = await self.CubiomesModule({
       locateFile(path) {
-        // path will be something like "cubiomes.wasm"
+        console.log('[worker] locateFile called for:', path)
         return '/wasm/' + path
+      },
+      onAbort(reason) {
+        console.error('[worker] WASM aborted:', reason)
       }
     })
+    console.log('[worker] module instantiated, _getBiomeAt:', typeof mod._getBiomeAt)
     setModule(mod)
-    console.log('[worker] WASM ready')
+    console.log('[worker] WASM fully ready')
   } catch (e) {
-    console.warn('[worker] WASM not available, using stubs:', e.message)
+    console.warn('[worker] WASM failed:', e.message, e.stack)
   }
   ready = true
   self.postMessage({ type: 'ready' })
