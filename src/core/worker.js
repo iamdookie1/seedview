@@ -1,31 +1,25 @@
-// Web Worker — runs all cubiomes queries off the main thread.
-
 import { getBiomeAt, getStructuresInRegion, biomeColor, setModule } from './cubiomes.js'
 
 let ready = false
 
 async function init() {
   try {
-    // Fetch the Emscripten JS glue, inject it via a classic blob worker
-    // then get the module back. This is the only reliable way in a module worker.
     const res = await fetch('/wasm/cubiomes.js')
-    if (!res.ok) throw new Error('fetch failed')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const text = await res.text()
 
-    // Create a temporary classic worker from a blob to run the Emscripten init
-    // Then communicate the WASM exports back via a SharedArrayBuffer isn't needed —
-    // instead we just eval in this context using an indirect eval
-    const indirectEval = eval  // indirect eval runs in global scope
+    const indirectEval = eval
     indirectEval(text)
 
-    // After eval, CubiomesModule should be on self (globalThis)
-    if (typeof self.CubiomesModule === 'function') {
-      const mod = await self.CubiomesModule()
-      setModule(mod)
-      console.log('[worker] WASM ready')
-    } else {
-      throw new Error('CubiomesModule not found after eval')
-    }
+    // Override locateFile so Emscripten finds the .wasm at the correct absolute URL
+    const mod = await self.CubiomesModule({
+      locateFile(path) {
+        // path will be something like "cubiomes.wasm"
+        return '/wasm/' + path
+      }
+    })
+    setModule(mod)
+    console.log('[worker] WASM ready')
   } catch (e) {
     console.warn('[worker] WASM not available, using stubs:', e.message)
   }
