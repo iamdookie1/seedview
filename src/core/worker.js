@@ -11,11 +11,12 @@ async function init() {
     const text = await res.text()
     console.log('[worker] script length:', text.length, 'first 80 chars:', text.slice(0, 80))
 
-    const indirectEval = eval
-    indirectEval(text)
-    console.log('[worker] eval done, CubiomesModule type:', typeof self.CubiomesModule)
+    // Wrap in an IIFE that returns the function, works regardless of eval scope
+    const factory = new Function(text + '\nreturn CubiomesModule;')
+    const CubiomesModuleFn = factory()
+    console.log('[worker] factory done, CubiomesModuleFn type:', typeof CubiomesModuleFn)
 
-    const mod = await self.CubiomesModule({
+    const mod = await CubiomesModuleFn({
       locateFile(path) {
         console.log('[worker] locateFile called for:', path)
         return '/wasm/' + path
@@ -45,6 +46,12 @@ self.onmessage = function({ data }) {
     const size = canvasSize
     const blockPerPx = 256 / size
     const buf = new Uint8ClampedArray(size * size * 4)
+
+    // Debug first tile only
+    if (tileX === 0 && tileZ === 0) {
+      const testBiome = getBiomeAt(seed, edition, version, dimension, 0, 0)
+      console.log('[worker] test getBiomeAt(0,0):', testBiome, 'stub?', !self._cubiomesModule)
+    }
 
     for (let py = 0; py < size; py++) {
       for (let px = 0; px < size; px++) {
