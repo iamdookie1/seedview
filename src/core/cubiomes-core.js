@@ -4,9 +4,8 @@
 let _module = null
 let _stub   = true  // start as stub until setModule is called
 
-// We don't know the exact Generator size at compile time.
-// Start with 256KB and double if malloc fails.
-const GEN_SIZES = [256*1024, 512*1024, 1024*1024, 2*1024*1024]
+// Generator sizes to try — 1.17 and below need ~1.5MB for LayerStack
+const GEN_SIZES = [2*1024*1024, 4*1024*1024, 8*1024*1024]
 
 const VERSION_MAP = {
   java:    { '1.21':21,'1.20':20,'1.19':19,'1.18':18,'1.17':17,'1.16':16,'1.15':15,'1.14':14 },
@@ -55,11 +54,9 @@ function getGenerator(mcVer, dimId, numSeed) {
   }
   if (!ptr) throw new Error('malloc failed for all sizes')
 
-  // Zero out the memory before use to avoid stale data issues
-  _module.HEAPU8.fill(0, ptr, ptr + GEN_SIZES[0])
-
   _module._setupGenerator(ptr, mcVer, 0)
-  _module._applySeed(ptr, dimId, numSeed)
+  // applySeed takes a uint64 seed — pass as BigInt
+  _module._applySeed(ptr, dimId, BigInt(numSeed))
   _genPtr = ptr
   _genKey = key
   return ptr
@@ -100,7 +97,7 @@ export function getStructuresInRegion(seed, edition, version, dimension, x0, z0,
       for (let rx = rx0; rx <= rx1; rx++) {
         for (let rz = rz0; rz <= rz1; rz++) {
           try {
-            const ok = _module._getStructurePos(structId, mcVer, numSeed, rx, rz, posPtr)
+            const ok = _module._getStructurePos(structId, mcVer, BigInt(numSeed), rx, rz, posPtr)
             if (!ok) continue
             const px = _module.HEAP32[posPtr >> 2]
             const pz = _module.HEAP32[(posPtr >> 2) + 1]
