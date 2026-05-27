@@ -1,7 +1,5 @@
 import { state } from '../state.js'
-
-const JAVA_VERSIONS    = ['1.21', '1.20', '1.19', '1.18', '1.17', '1.16', '1.15', '1.14']
-const BEDROCK_VERSIONS = ['1.21', '1.20', '1.19', '1.18']
+import { JAVA_VERSIONS, BEDROCK_VERSIONS } from '../core/cubiomes-core.js'
 
 export function initToolbar(onSeedLoad, onDimensionChange, renderer) {
   const seedInput  = document.getElementById('seed-input')
