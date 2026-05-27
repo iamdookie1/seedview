@@ -1,5 +1,4 @@
 // Web Worker — runs all cubiomes queries off the main thread.
-// Loads WASM via importScripts so Vite never tries to bundle /wasm/cubiomes.js
 
 import { getBiomeAt, getStructuresInRegion, biomeColor, setModule } from './cubiomes.js'
 
@@ -7,10 +6,26 @@ let ready = false
 
 async function init() {
   try {
-    importScripts('/wasm/cubiomes.js')
-    const mod = await self.CubiomesModule()
-    setModule(mod)
-    console.log('[worker] WASM ready')
+    // Fetch the Emscripten JS glue, inject it via a classic blob worker
+    // then get the module back. This is the only reliable way in a module worker.
+    const res = await fetch('/wasm/cubiomes.js')
+    if (!res.ok) throw new Error('fetch failed')
+    const text = await res.text()
+
+    // Create a temporary classic worker from a blob to run the Emscripten init
+    // Then communicate the WASM exports back via a SharedArrayBuffer isn't needed —
+    // instead we just eval in this context using an indirect eval
+    const indirectEval = eval  // indirect eval runs in global scope
+    indirectEval(text)
+
+    // After eval, CubiomesModule should be on self (globalThis)
+    if (typeof self.CubiomesModule === 'function') {
+      const mod = await self.CubiomesModule()
+      setModule(mod)
+      console.log('[worker] WASM ready')
+    } else {
+      throw new Error('CubiomesModule not found after eval')
+    }
   } catch (e) {
     console.warn('[worker] WASM not available, using stubs:', e.message)
   }
