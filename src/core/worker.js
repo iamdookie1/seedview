@@ -1,34 +1,21 @@
-import { getBiomeAt, getStructuresInRegion, biomeColor, setModule } from './cubiomes-core.js'
+import { renderTileToBuffer, getStructuresInRegion, getBiomeAt, setModule, BIOME_NAMES } from './cubiomes-core.js'
 
 let ready = false
 
 async function init() {
   try {
-    console.log('[worker] fetching /wasm/cubiomes.js...')
     const res = await fetch('/wasm/cubiomes.js')
-    console.log('[worker] fetch status:', res.status)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const text = await res.text()
-    console.log('[worker] script length:', text.length)
-
     const factory = new Function(text + '\nreturn CubiomesModule;')
-    const CubiomesModuleFn = factory()
-    console.log('[worker] factory done, type:', typeof CubiomesModuleFn)
-
-    const mod = await CubiomesModuleFn({
-      locateFile(path) {
-        console.log('[worker] locateFile:', path)
-        return '/wasm/' + path
-      },
-    })
-    console.log('[worker] module instantiated, _getBiomeAt:', typeof mod._getBiomeAt)
+    const mod = await factory()({ locateFile: p => '/wasm/' + p })
     setModule(mod)
-    console.log('[worker] WASM fully ready')
-  } catch (e) {
-    console.warn('[worker] WASM failed:', e.message)
+    console.log('[worker] WASM ready, _getBiomeAt:', typeof mod._getBiomeAt)
+  } catch(e) {
+    console.warn('[worker] WASM failed, using stubs:', e.message)
   }
   ready = true
-  self.postMessage({ type: 'ready' })
+  self.postMessage({ type:'ready' })
 }
 
 init()
@@ -38,32 +25,9 @@ self.onmessage = function({ data }) {
   const { type, id, payload } = data
 
   if (type === 'renderTile') {
-    const { seed, edition, version, dimension, tileX, tileZ, canvasSize, highlightBiome } = payload
-    const size = canvasSize
-    const blockPerPx = 256 / size
-    const buf = new Uint8ClampedArray(size * size * 4)
-
-    if (tileX === 0 && tileZ === 0) {
-      const test = getBiomeAt(seed, edition, version, dimension, 0, 0)
-      console.log('[worker] first tile biome at 0,0:', test)
-    }
-
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        const bx = Math.floor(tileX + px * blockPerPx)
-        const bz = Math.floor(tileZ + py * blockPerPx)
-        const biomeId = getBiomeAt(seed, edition, version, dimension, bx, bz)
-        let [r, g, b] = biomeColor(biomeId)
-        if (highlightBiome && String(biomeId) !== String(highlightBiome)) {
-          r = Math.round(r * 0.25)
-          g = Math.round(g * 0.25)
-          b = Math.round(b * 0.25)
-        }
-        const i = (py * size + px) * 4
-        buf[i]=r; buf[i+1]=g; buf[i+2]=b; buf[i+3]=255
-      }
-    }
-    self.postMessage({ type:'tileReady', id, result:{ tileX, tileZ, buf } }, [buf.buffer])
+    const { seed, edition, version, dimension, tileX, tileZ, tileBlocks, bufSize, highlightBiome } = payload
+    const buf = renderTileToBuffer(seed, edition, version, dimension, tileX, tileZ, tileBlocks, bufSize, highlightBiome)
+    self.postMessage({ type:'tileReady', id, result:{ tileX, tileZ, tileBlocks, buf } }, [buf.buffer])
     return
   }
 
@@ -77,7 +41,8 @@ self.onmessage = function({ data }) {
   if (type === 'getBiomeName') {
     const { seed, edition, version, dimension, blockX, blockZ } = payload
     const biomeId = getBiomeAt(seed, edition, version, dimension, blockX, blockZ)
-    self.postMessage({ type:'biomeNameReady', id, result: biomeId })
+    const name = BIOME_NAMES[biomeId] ?? `Biome ${biomeId}`
+    self.postMessage({ type:'biomeNameReady', id, result:{ biomeId, name } })
     return
   }
 }
