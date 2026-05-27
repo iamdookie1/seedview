@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SeedView — Minecraft Seed Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+
+  <!-- TOP TOOLBAR -->
+  <header id="toolbar">
+    <div class="toolbar-left">
+      <span class="logo">🌱 SeedView</span>
+    </div>
+    <div class="toolbar-center">
+      <div class="seed-input-wrap">
+        <input id="seed-input" type="text" placeholder="Enter seed (text or number)…" autocomplete="off" spellcheck="false" />
+        <button id="seed-go">Load</button>
+      </div>
+      <div class="toolbar-controls">
+        <select id="edition-select">
+          <option value="java">Java</option>
+          <option value="bedrock">Bedrock</option>
+        </select>
+        <select id="version-select">
+          <!-- populated by toolbar.js -->
+        </select>
+        <select id="dimension-select">
+          <option value="overworld">Overworld</option>
+          <option value="nether">Nether</option>
+          <option value="end">The End</option>
+        </select>
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <div class="coord-search-wrap">
+        <input id="coord-x" type="number" placeholder="X" />
+        <input id="coord-z" type="number" placeholder="Z" />
+        <button id="coord-go" title="Jump to coordinates">Go</button>
+      </div>
+      <button id="share-btn" title="Copy shareable link">🔗 Share</button>
+      <button id="theme-toggle" title="Toggle theme">🌙</button>
+    </div>
+  </header>
+
+  <!-- MAIN LAYOUT -->
+  <div id="app">
+
+    <!-- SIDEBAR -->
+    <aside id="sidebar">
+
+      <section class="sidebar-section" id="overlay-section">
+        <h3 class="section-title">Overlays</h3>
+        <div class="toggle-list" id="overlay-toggles">
+          <label class="toggle-row">
+            <input type="checkbox" id="tog-biomes" checked />
+            <span class="toggle-label">Biome colors</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="tog-slime" />
+            <span class="toggle-label">Slime chunks</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="tog-chunks" />
+            <span class="toggle-label">Chunk borders</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="tog-structures" checked />
+            <span class="toggle-label">Structures</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="sidebar-section" id="biome-highlight-section">
+        <h3 class="section-title">Highlight biome</h3>
+        <select id="biome-highlight-select">
+          <option value="">None</option>
+          <!-- populated per dimension -->
+        </select>
+      </section>
+
+      <section class="sidebar-section" id="structure-section">
+        <h3 class="section-title">Structures</h3>
+        <div class="toggle-list" id="structure-toggles">
+          <!-- populated by structures.js based on dimension -->
+        </div>
+      </section>
+
+      <section class="sidebar-section" id="history-section">
+        <h3 class="section-title">Recent seeds</h3>
+        <ul id="seed-history-list">
+          <!-- populated by sidebar.js -->
+        </ul>
+      </section>
+
+    </aside>
+
+    <!-- MAP CANVAS -->
+    <main id="map-container">
+      <canvas id="map-canvas"></canvas>
+      <div id="map-overlay-ui">
+        <div id="coords-display">X: 0  Z: 0</div>
+        <div id="biome-display"></div>
+      </div>
+      <div id="loading-overlay">
+        <div class="spinner"></div>
+        <span id="loading-text">Loading WASM…</span>
+      </div>
+    </main>
+
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
