@@ -11,8 +11,9 @@ export function setModule(mod) {
   _stub = false
 }
 
-// Generator struct size — large enough for any version
-const GEN_SIZE = 8192
+// Generator struct size — must be large enough for the full Generator union
+// LayerStack alone can be >200KB, so we allocate generously
+const GEN_SIZE = 1024 * 512  // 512 KB
 
 // Version string → cubiomes MC_VERSION int
 const VERSION_MAP = {
@@ -75,23 +76,34 @@ export function parseSeed(seedStr) {
 }
 
 // Get biome ID at a block position
+// Reuse a single generator per seed/dimension/version to avoid constant alloc/free
+let _genPtr = 0
+let _genKey = ''
+
+function getGenerator(mcVer, dimId, numSeed) {
+  const key = `${mcVer}:${dimId}:${numSeed}`
+  if (_genPtr && _genKey === key) return _genPtr
+  if (_genPtr) _module._free(_genPtr)
+  _genPtr = _module._malloc(GEN_SIZE)
+  _module._setupGenerator(_genPtr, mcVer, 0)
+  _module._applySeed(_genPtr, dimId, numSeed)
+  _genKey = key
+  return _genPtr
+}
+
 export function getBiomeAt(seed, edition, version, dimension, blockX, blockZ) {
   if (_stub || !_module) return stubBiome(blockX, blockZ)
 
-  const mcVer = VERSION_MAP[edition]?.[version] ?? 21
-  const dimId = { overworld: 0, nether: -1, end: 1 }[dimension] ?? 0
+  const mcVer  = VERSION_MAP[edition]?.[version] ?? 21
+  const dimId  = { overworld: 0, nether: -1, end: 1 }[dimension] ?? 0
   const numSeed = parseSeed(seed)
 
   try {
-    const g = _module._malloc(GEN_SIZE)
-    _module._setupGenerator(g, mcVer, 0)
-    _module._applySeed(g, dimId, numSeed)
-    // getBiomeAt(g, scale, x, y, z) — scale 1 = block, 4 = quarter
-    const biome = _module._getBiomeAt(g, 4, blockX >> 2, 64, blockZ >> 2)
-    _module._free(g)
-    return biome
-  } catch (e) {
-    console.warn('[cubiomes] getBiomeAt error:', e)
+    const g = getGenerator(mcVer, dimId, numSeed)
+    // getBiomeAt(g, scale, x, y, z) — use scale 4 (quarter-block) for speed
+    const biome = _module._getBiomeAt(g, 4, blockX >> 2, 0, blockZ >> 2)
+    return biome >= 0 ? biome : stubBiome(blockX, blockZ)
+  } catch {
     return stubBiome(blockX, blockZ)
   }
 }
@@ -109,12 +121,9 @@ export function getStructuresInRegion(seed, edition, version, dimension, x0, z0,
   const types  = getStructureTypesForDimension(dimension)
 
   try {
-    const g      = _module._malloc(GEN_SIZE)
-    const sconf  = _module._malloc(64)   // StructureConfig is small
-    const posPtr = _module._malloc(8)    // Pos = two ints
-
-    _module._setupGenerator(g, mcVer, 0)
-    _module._applySeed(g, dimId, numSeed)
+    const g      = getGenerator(mcVer, dimId, numSeed)
+    const sconf  = _module._malloc(64)
+    const posPtr = _module._malloc(8)
 
     const regionSize = 512  // blocks — scan in 512-block region chunks
     const rx0 = Math.floor(x0 / regionSize)
@@ -149,7 +158,6 @@ export function getStructuresInRegion(seed, edition, version, dimension, x0, z0,
 
     _module._free(posPtr)
     _module._free(sconf)
-    _module._free(g)
   } catch (e) {
     console.warn('[cubiomes] getStructuresInRegion error:', e)
   }
