@@ -7,8 +7,8 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
-  optimizeDeps: {
-    exclude: ['cubiomes']
+  worker: {
+    format: 'es',
   },
   assetsInclude: ['**/*.wasm'],
 })
