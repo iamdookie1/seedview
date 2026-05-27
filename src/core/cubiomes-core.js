@@ -4,7 +4,9 @@
 let _module = null
 let _stub   = true  // start as stub until setModule is called
 
-const GEN_SIZE = 1024 * 512
+// We don't know the exact Generator size at compile time.
+// Start with 256KB and double if malloc fails.
+const GEN_SIZES = [256*1024, 512*1024, 1024*1024, 2*1024*1024]
 
 const VERSION_MAP = {
   java:    { '1.21':21,'1.20':20,'1.19':19,'1.18':18,'1.17':17,'1.16':16,'1.15':15,'1.14':14 },
@@ -44,8 +46,18 @@ function getGenerator(mcVer, dimId, numSeed) {
   const key = `${mcVer}:${dimId}:${numSeed}`
   if (_genPtr && _genKey === key) return _genPtr
   if (_genPtr) { _module._free(_genPtr); _genPtr = 0 }
-  const ptr = _module._malloc(GEN_SIZE)
-  if (!ptr) throw new Error('malloc failed')
+
+  // Try increasing sizes until malloc succeeds
+  let ptr = 0
+  for (const size of GEN_SIZES) {
+    ptr = _module._malloc(size)
+    if (ptr) break
+  }
+  if (!ptr) throw new Error('malloc failed for all sizes')
+
+  // Zero out the memory before use to avoid stale data issues
+  _module.HEAPU8.fill(0, ptr, ptr + GEN_SIZES[0])
+
   _module._setupGenerator(ptr, mcVer, 0)
   _module._applySeed(ptr, dimId, numSeed)
   _genPtr = ptr
