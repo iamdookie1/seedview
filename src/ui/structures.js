@@ -29,7 +29,7 @@ export function drawStructures(ctx, W, H, camX, camZ, zoom, wx0, wz0, wx1, wz1, 
   }
 
   const structs = _cache.get(key) ?? []
-  const types   = getStructureTypesForDimension(state.dimension)
+  const types   = getStructureTypesForDimension(state.dimension, state.version)
   const typeMap = Object.fromEntries(types.map(t => [t.type, t]))
 
   // Icon size scales with zoom but clamps
@@ -91,7 +91,7 @@ export function invalidateStructures() {
 export function buildStructureToggles() {
   const container = document.getElementById('structure-toggles')
   container.innerHTML = ''
-  const types = getStructureTypesForDimension(state.dimension)
+  const types = getStructureTypesForDimension(state.dimension, state.version)
   for (const { type, label, icon } of types) {
     if (state.structureVisibility[type] === undefined)
       state.structureVisibility[type] = true
