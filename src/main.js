@@ -13,18 +13,23 @@ initTheme()
 const workerUrl = new URL('./core/worker.js', import.meta.url)
 const renderer  = new Renderer(document.getElementById('map-canvas'), workerUrl)
 
-// Wait for all workers ready
 let readyCount = 0
+const totalWorkers = renderer.tiles.workers.length
+
+function onWorkerReady() {
+  readyCount++
+  document.getElementById('loading-text').textContent =
+    `Loading workers… ${readyCount}/${totalWorkers}`
+  if (readyCount >= totalWorkers) {
+    state.wasmReady = true
+    document.getElementById('loading-overlay').classList.add('hidden')
+    renderer.markDirty()
+  }
+}
+
 for (const w of renderer.tiles.workers) {
   w.addEventListener('message', ({ data }) => {
-    if (data.type === 'ready') {
-      readyCount++
-      if (readyCount === renderer.tiles.workers.length) {
-        state.wasmReady = true
-        document.getElementById('loading-overlay').classList.add('hidden')
-        renderer.markDirty()
-      }
-    }
+    if (data.type === 'ready') onWorkerReady()
     if (data.type === 'structuresReady') {
       onStructuresReady(data.id, data.result)
       renderer.markDirty()
@@ -36,16 +41,18 @@ function onSeedLoad() {
   renderer.invalidateTiles()
   invalidateStructures()
   addToHistory(state.seed, state.edition, state.version)
-  renderHistory(entry => {
-    state.seed    = entry.seed
-    state.edition = entry.edition
-    state.version = entry.version
-    document.getElementById('seed-input').value     = entry.seed
-    document.getElementById('edition-select').value = entry.edition
-    onSeedLoad()
-  })
+  renderHistory(onHistorySelect)
   pushURL()
   renderer.markDirty()
+}
+
+function onHistorySelect(entry) {
+  state.seed    = entry.seed
+  state.edition = entry.edition
+  state.version = entry.version
+  document.getElementById('seed-input').value      = entry.seed
+  document.getElementById('edition-select').value  = entry.edition
+  onSeedLoad()
 }
 
 function onDimensionChange() {
@@ -64,26 +71,18 @@ function onOverlayChange() {
 initToolbar(onSeedLoad, onDimensionChange, renderer)
 initSidebar(onOverlayChange)
 buildStructureToggles()
-
-renderHistory(entry => {
-  state.seed    = entry.seed
-  state.edition = entry.edition
-  state.version = entry.version
-  document.getElementById('seed-input').value     = entry.seed
-  document.getElementById('edition-select').value = entry.edition
-  onSeedLoad()
-})
+renderHistory(onHistorySelect)
 
 document.getElementById('share-btn').addEventListener('click', shareURL)
 state.onChange(() => { pushURL(); renderer.markDirty() })
 renderer.start()
 
-// Fallback if WASM never loads
+// Fallback: if workers don't report ready in 8s, show stub data anyway
 setTimeout(() => {
   if (!state.wasmReady) {
-    document.getElementById('loading-text').textContent = 'Using stub data — see README to compile cubiomes WASM'
+    console.warn('[main] worker timeout — showing stub data')
     state.wasmReady = true
     document.getElementById('loading-overlay').classList.add('hidden')
     renderer.markDirty()
   }
-}, 5000)
+}, 8000)
